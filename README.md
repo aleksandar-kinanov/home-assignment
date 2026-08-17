@@ -6,8 +6,14 @@ up a Prometheus + Grafana monitoring stack for it — all from a single command.
 
 ## Quick start
 
-Prerequisites: `docker`, `kind`, `kubectl`, `helm`, `curl`, `jq` on `PATH`,
-and Docker Desktop (or an equivalent daemon) running.
+Prerequisites (all must be on `PATH`):
+
+- `docker` (with Docker Desktop, or an equivalent daemon, running)
+- `kind`
+- `kubectl`
+- `helm`
+- `curl`
+- `jq`
 
 ```bash
 ./setup.sh
@@ -76,18 +82,19 @@ Five jobs in `.github/workflows/ci.yml`:
    flag, so the same detection logic isn't duplicated across jobs (`Promote`
    runs in a separate workflow run after merge and can't share job outputs
    with this one, so it re-checks independently — see below).
-2. **`Test & Lint`** and **`Helm Lint`** run in parallel — both only depend
-   on `Detect changes`, not on each other. `Test & Lint` skips unless
-   `app_changed`, running `npm ci && npm run lint && npm test`. `Helm Lint`
-   skips unless `charts_changed`, running `helm lint charts/app`.
-3. **`Build & Push Image`** — skips entirely if the PR doesn't touch `app/`.
-   Neither this nor `Test & Lint` runs on push/merge either — the merge
-   commit is the same code already tested and built on the PR, re-running
-   would be redundant. Pushes the image to GHCR tagged with the PR's short
-   commit SHA, generates a CycloneDX SBOM from the pushed image (via Syft),
-   and attaches it as a build attestation on the image's digest — verifiable
-   later with `gh attestation verify`.
-4. **`Promote`** — runs on push to `main` (i.e. after a merge). Finds the PR
+2. **`Test & Lint`** — depends only on `Detect changes`, skips unless
+   `app_changed`. Runs `npm ci && npm run lint && npm test`.
+3. **`Helm Lint`** — depends only on `Detect changes` (not on `Test & Lint`,
+   so it runs in parallel with it), skips unless `charts_changed`. Runs
+   `helm lint charts/app`.
+4. **`Build & Push Image`** — skips entirely if the PR doesn't touch `app/`.
+   Neither this nor `Test & Lint`/`Helm Lint` runs on push/merge either — the
+   merge commit is the same code already tested and built on the PR,
+   re-running would be redundant. Pushes the image to GHCR tagged with the
+   PR's short commit SHA, generates a CycloneDX SBOM from the pushed image
+   (via Syft), and attaches it as a build attestation on the image's digest —
+   verifiable later with `gh attestation verify`.
+5. **`Promote`** — runs on push to `main` (i.e. after a merge). Finds the PR
    that was just merged; if it touched `app/`, computes the next version (see
    below), pushes that as a git tag on the merge commit, and re-tags the
    already-built image with it via `docker buildx imagetools create` — a
@@ -96,14 +103,26 @@ Five jobs in `.github/workflows/ci.yml`:
 
 The image that ends up tagged with a release version is always byte-for-byte
 what was built, tested, and scanned on the PR — never a fresh rebuild that
-could drift from what was reviewed. `main` should have branch protection
-requiring PRs + these status checks (`Test & Lint`, `Helm Lint`,
-`Build & Push Image`) — direct pushes to `main` bypass this whole flow and
-`promote` will fail loudly if there's no PR to attribute the merge to. All
-three required checks can show as "skipped" rather than "success" on a PR
-that doesn't touch the relevant path (that's `Detect changes` doing its
-job) — GitHub treats a skipped required check as satisfying the requirement,
-so this doesn't block merging.
+could drift from what was reviewed. To make that literally true, every PR job
+checks out the PR's **head SHA** rather than GitHub's default merge commit,
+so tests, lint, and the image build all run against the identical commit.
+(The trade-off: breakage caused by `main` moving underneath a long-lived PR
+isn't caught until merge — enable "require branches to be up to date before
+merging" in branch protection if that matters.)
+
+`main` should have branch protection requiring PRs, plus these required
+status checks:
+
+- `Test & Lint`
+- `Helm Lint`
+- `Build & Push Image`
+
+Direct pushes to `main` bypass this whole flow and `promote` will fail loudly
+if there's no PR to attribute the merge to. All three required checks can
+show as "skipped" rather than "success" on a PR that doesn't touch the
+relevant path (that's `Detect changes` doing its job) — GitHub treats a
+skipped required check as satisfying the requirement, so this doesn't block
+merging.
 
 ### Versioning
 
@@ -142,7 +161,7 @@ app (`up{job="app"}` must read `1`), so a successful run is itself the proof.
 To look deeper:
 
 ```bash
-curl -s "http://localhost:9090/api/v1/targets" | python3 -m json.tool
+curl -s "http://localhost:9090/api/v1/targets" | jq .
 curl -s -u admin:admin "http://localhost:3001/api/search"
 ```
 
