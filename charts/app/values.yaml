@@ -1,0 +1,48 @@
+replicaCount: 1
+
+image:
+  repository: devops-assignment-app
+  tag: local
+  # Image is loaded into Kind directly via `kind load docker-image`, never
+  # pulled from a registry, so IfNotPresent avoids a doomed pull attempt.
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+# App env vars (see app/src/index.ts). readyDelayMs must match what the
+# container actually enforces -- it also drives the readiness probe timing
+# below, so change both together if this is ever overridden.
+env:
+  port: 3000
+  readyDelayMs: 5000
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+probes:
+  # /health is unconditional (200 from the moment the process is up), so
+  # liveness can start checking almost immediately.
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  # /ready returns 503 until readyDelayMs has elapsed. Rather than hardcoding
+  # initialDelaySeconds to match readyDelayMs exactly (brittle -- silently
+  # wrong if readyDelayMs is ever changed without updating this too), start
+  # polling quickly and give it enough failureThreshold*periodSeconds
+  # headroom (10s) to comfortably clear the default 5s delay with margin.
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 2
+    timeoutSeconds: 2
+    failureThreshold: 5
+
+podAnnotations: {}
