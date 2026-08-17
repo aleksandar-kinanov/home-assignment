@@ -36,6 +36,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,8 +48,24 @@ jobs:
         env:
           SHA: ${{ github.event.pull_request.head.sha }}
 
+      - name: Check for app/ changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          changed=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -c '^app/' || true)
+          if [ "$changed" -gt 0 ]; then
+            echo "app_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under app/ in this PR — skipping image build."
+          fi
+
       - uses: docker/setup-buildx-action@v3
+        if: steps.changes.outputs.app_changed == 'true'
       - uses: docker/login-action@v3
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -56,6 +73,7 @@ jobs:
 
       - uses: docker/metadata-action@v5
         id: meta
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -63,6 +81,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         id: build
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           context: app
           push: true
@@ -71,6 +90,7 @@ jobs:
 
       - name: Generate SBOM (CycloneDX via Syft)
         uses: anchore/sbom-action@v0
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           image: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
@@ -78,12 +98,14 @@ jobs:
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           name: sbom
           path: sbom.cyclonedx.json
 
       - name: Attest SBOM
         uses: actions/attest-sbom@v1
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -104,24 +126,42 @@ jobs:
       - name: Resolve merged PR's head SHA
         id: pr
         run: |
-          head_sha=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
-            -H "Accept: application/vnd.github+json" \
-            --jq '.[0].head.sha')
+          pr_json=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            -H "Accept: application/vnd.github+json")
+          head_sha=$(echo "$pr_json" | jq -r '.[0].head.sha')
+          number=$(echo "$pr_json" | jq -r '.[0].number')
           if [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
             echo "No merged PR found for commit ${{ github.sha }} — this workflow expects merges to main to go through a PR (so build-and-push already built/attested the image)." >&2
             exit 1
           fi
           echo "short=${head_sha:0:7}" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check whether the merged PR touched app/
+        id: changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          changed=$(gh api "repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/files" \
+            --paginate --jq '.[].filename' | grep -c '^app/' || true)
+          if [ "$changed" -gt 0 ]; then
+            echo "app_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Merged PR #${{ steps.pr.outputs.number }} didn't touch app/ — no new image was built, nothing to promote."
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           fetch-tags: true
           fetch-depth: 0
 
       - name: Compute next release version
         id: version
+        if: steps.changes.outputs.app_changed == 'true'
         run: |
           latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
           if [ -z "$latest" ]; then
@@ -133,18 +173,22 @@ jobs:
           echo "version=$next" >> "$GITHUB_OUTPUT"
 
       - name: Create and push release tag
+        if: steps.changes.outputs.app_changed == 'true'
         run: |
           git tag ${{ steps.version.outputs.version }} ${{ github.sha }}
           git push origin ${{ steps.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.changes.outputs.app_changed == 'true'
       - uses: docker/login-action@v3
+        if: steps.changes.outputs.app_changed == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Tag already-built image with release version
+        if: steps.changes.outputs.app_changed == 'true'
         run: |
           docker buildx imagetools create \
             --tag ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
