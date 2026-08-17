@@ -30,7 +30,7 @@ app.get('/metrics', async (_req: Request, res: Response) => {
 });
 
 app.get('/', (_req: Request, res: Response) => {
-  res.status(200).send('Hello from the DevOps home assignment app! - test');
+  res.status(200).send('Hello from the DevOps home assignment app!');
 });
 
 if (require.main === module) {
