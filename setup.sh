@@ -38,7 +38,7 @@ fi
 
 log "Checking required tools"
 missing=0
-for cmd in docker kind kubectl helm curl python3; do
+for cmd in docker kind kubectl helm curl jq; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "  missing: $cmd" >&2
     missing=1
@@ -74,12 +74,7 @@ verified=0
 for _ in $(seq 1 30); do
   if response="$(curl -sf "http://localhost:${PROM_PORT}/api/v1/query" \
       --data-urlencode 'query=up{job="app"}' 2>/dev/null)"; then
-    if echo "$response" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-result = data.get("data", {}).get("result", [])
-sys.exit(0 if result and result[0]["value"][1] == "1" else 1)
-' 2>/dev/null; then
+    if echo "$response" | jq -e '.data.result[0].value[1] == "1"' >/dev/null 2>&1; then
       verified=1
       break
     fi

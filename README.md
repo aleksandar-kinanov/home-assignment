@@ -6,7 +6,7 @@ up a Prometheus + Grafana monitoring stack for it — all from a single command.
 
 ## Quick start
 
-Prerequisites: `docker`, `kind`, `kubectl`, `helm`, `curl`, `python3` on `PATH`,
+Prerequisites: `docker`, `kind`, `kubectl`, `helm`, `curl`, `jq` on `PATH`,
 and Docker Desktop (or an equivalent daemon) running.
 
 ```bash
