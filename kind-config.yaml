@@ -1,0 +1,21 @@
+# Kind cluster config for the devops-home-assignment app + monitoring stack.
+#
+# extraPortMappings expose the app/Prometheus/Grafana NodePort Services
+# straight on localhost, so setup.sh needs no `kubectl port-forward` step to
+# leave the system in an immediately-verifiable state.
+#
+# NOTE: these containerPort values must stay in sync with the NodePorts in
+# charts/app/values.yaml (service.nodePort, monitoring.prometheus.service.nodePort,
+# monitoring.grafana.service.nodePort) -- Kind has no way to read Helm values,
+# so this is a manual sync point if those ever change.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080 # app
+        hostPort: 8080
+      - containerPort: 30090 # prometheus
+        hostPort: 9090
+      - containerPort: 30030 # grafana (3000 avoided -- common local dev port conflict)
+        hostPort: 3001

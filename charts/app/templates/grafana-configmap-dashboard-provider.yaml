@@ -1,0 +1,17 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "app.fullname" . }}-grafana-dashboard-provider
+  labels:
+    {{- include "app.componentLabels" (dict "ctx" . "component" "grafana") | nindent 4 }}
+data:
+  provider.yml: |
+    apiVersion: 1
+    providers:
+      - name: app-dashboards
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+{{- end }}
