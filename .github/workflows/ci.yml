@@ -46,11 +46,18 @@ jobs:
     needs: changes
     if: needs.changes.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: app
     steps:
+      # Deliberately the PR head SHA, not the default merge commit: the image
+      # in build-and-push is built from this same SHA, so tests run against
+      # byte-for-byte what ships.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -67,8 +74,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.charts_changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: azure/setup-helm@v4
         with:
@@ -78,8 +89,8 @@ jobs:
 
   build-and-push:
     name: Build & Push Image
-    if: github.event_name == 'pull_request'
     needs: [changes, test-lint]
+    if: needs.changes.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -172,8 +183,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          changed=$(gh api "repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/files" \
-            --paginate --jq '.[].filename' | grep -c '^app/' || true)
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/files" \
+            --paginate --jq '.[].filename')
+
+          changed=$(echo "$files" | grep -c '^app/' || true)
           if [ "$changed" -gt 0 ]; then
             echo "app_changed=true" >> "$GITHUB_OUTPUT"
           else
@@ -184,14 +197,14 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.changes.outputs.app_changed == 'true'
         with:
-          fetch-tags: true
           fetch-depth: 0
 
       - name: Compute next release version
         id: version
         if: steps.changes.outputs.app_changed == 'true'
         run: |
-          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
           if [ -z "$latest" ]; then
             next="v0.1.0"
           else
@@ -199,12 +212,6 @@ jobs:
             next="v${major}.${minor}.$((patch + 1))"
           fi
           echo "version=$next" >> "$GITHUB_OUTPUT"
-
-      - name: Create and push release tag
-        if: steps.changes.outputs.app_changed == 'true'
-        run: |
-          git tag ${{ steps.version.outputs.version }} ${{ github.sha }}
-          git push origin ${{ steps.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
         if: steps.changes.outputs.app_changed == 'true'
@@ -215,9 +222,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify the PR-built image exists
+        if: steps.changes.outputs.app_changed == 'true'
+        run: |
+          docker buildx imagetools inspect \
+            ghcr.io/${{ github.repository }}:${{ steps.pr.outputs.short }} >/dev/null
+
       - name: Tag already-built image with release version
         if: steps.changes.outputs.app_changed == 'true'
         run: |
           docker buildx imagetools create \
             --tag ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
             ghcr.io/${{ github.repository }}:${{ steps.pr.outputs.short }}
+
+      - name: Create and push release tag
+        if: steps.changes.outputs.app_changed == 'true'
+        run: |
+          git tag ${{ steps.version.outputs.version }} ${{ github.sha }}
+          git push origin ${{ steps.version.outputs.version }}
