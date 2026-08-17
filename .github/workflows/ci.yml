@@ -7,9 +7,44 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: Detect changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      app_changed: ${{ steps.check.outputs.app_changed }}
+      charts_changed: ${{ steps.check.outputs.charts_changed }}
+    steps:
+      - name: Check changed paths
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename')
+
+          app_changed=$(echo "$files" | grep -c '^app/' || true)
+          if [ "$app_changed" -gt 0 ]; then
+            echo "app_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under app/ in this PR."
+          fi
+
+          charts_changed=$(echo "$files" | grep -c '^charts/' || true)
+          if [ "$charts_changed" -gt 0 ]; then
+            echo "charts_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "charts_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes under charts/ in this PR."
+          fi
+
   test-lint:
     name: Test & Lint
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: needs.changes.outputs.app_changed == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,17 +62,30 @@ jobs:
       - run: npm run lint
       - run: npm test
 
+  helm-lint:
+    name: Helm Lint
+    needs: changes
+    if: needs.changes.outputs.charts_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+
+      - run: helm lint charts/app
+
   build-and-push:
     name: Build & Push Image
     if: github.event_name == 'pull_request'
-    needs: test-lint
+    needs: [changes, test-lint]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
-      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,24 +97,8 @@ jobs:
         env:
           SHA: ${{ github.event.pull_request.head.sha }}
 
-      - name: Check for app/ changes
-        id: changes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          changed=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-            --paginate --jq '.[].filename' | grep -c '^app/' || true)
-          if [ "$changed" -gt 0 ]; then
-            echo "app_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "app_changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes under app/ in this PR — skipping image build."
-          fi
-
       - uses: docker/setup-buildx-action@v3
-        if: steps.changes.outputs.app_changed == 'true'
       - uses: docker/login-action@v3
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -74,7 +106,6 @@ jobs:
 
       - uses: docker/metadata-action@v5
         id: meta
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -82,7 +113,6 @@ jobs:
 
       - uses: docker/build-push-action@v6
         id: build
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           context: app
           push: true
@@ -91,7 +121,6 @@ jobs:
 
       - name: Generate SBOM (CycloneDX via Syft)
         uses: anchore/sbom-action@v0
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           image: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
@@ -99,14 +128,12 @@ jobs:
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           name: sbom
           path: sbom.cyclonedx.json
 
       - name: Attest SBOM
         uses: actions/attest-sbom@v1
-        if: steps.changes.outputs.app_changed == 'true'
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
