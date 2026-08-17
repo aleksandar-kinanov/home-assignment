@@ -12,3 +12,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{- define "app.componentLabels" -}}
+{{ include "app.labels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "app.componentSelectorLabels" -}}
+{{ include "app.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
